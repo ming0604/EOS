@@ -1,6 +1,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 typedef struct food
 {
@@ -61,9 +64,96 @@ void count_total_price(int* total_arr, int item_index, int item_price)
     total_arr[item_index] += (item_price*count);
 }
 
-
-void order(food* food_items, int items_num)
+void* display_total_price(void *total_price_ptr)
 {   
+    char* seg_num[10] =
+    {   
+        //dp,a,b,c,d,e,f,g
+        //dp = 0
+        "01111110", // 0: a, b, c, d, e, f
+        "00110000", // 1: b, c
+        "01101101", // 2: a, b, d, e, g
+        "01111001", // 3: a, b, c, d, g
+        "00110011", // 4: b, c, f, g
+        "01011011", // 5: a, c, d, f, g
+        "01011111", // 6: a, c, d, e, f, g 
+        "01110000", // 7: a, b, c
+        "01111111", // 8: a, b, c, d, e, f, g
+        "01111011"  // 9: a, b, c, d, f, g
+    };
+    
+    int fd;
+    if((fd = open("/dev/etx_device", O_RDWR)) < 0) {
+        perror("/dev/etx_device");
+        exit(EXIT_FAILURE);
+    }
+    //get the total price
+    int total_price = *((int*)total_price_ptr);
+    //transform int to string 
+    char total_price_str[50];
+    sprintf(total_price_str, "%d", total_price);
+    //write into the driver
+    int len = strlen(total_price_str);
+    int num = 0;
+    for(int i=0; i<len; i++)
+    {   
+        num = total_price_str[i] - '0';
+        if(write(fd, seg_num[num], 8) == -1)
+        {
+            perror("write()");
+            exit(EXIT_FAILURE);
+        }
+        usleep(500000);  //sleep for 0.5s(=500000us)
+    }
+    close(fd);
+
+    pthread_exit(NULL);
+}
+
+void* display_distance(void *distance_ptr)
+{   
+  
+    int fd;
+    if((fd = open("/dev/etx_device", O_RDWR)) < 0) {
+        perror("/dev/etx_device");
+        exit(EXIT_FAILURE);
+    }
+    //get the distance 
+    int distance = *((int*)distance_ptr);
+    //initialize the string of total 8 LED 
+    char distance_str[8] = {0,0,0,0,0,0,0,0};
+    //set the initial state of the LEDs based on the distance and write it to the drive 
+    for(int i=0; i<distance; i++)
+    {
+        distance_str[i] = '1';
+        if(write(fd, distance_str, 8) == -1)
+        {
+            perror("write()");
+            exit(EXIT_FAILURE);
+        }
+        sleep(1);
+    }
+    //decrease one on-LEDs every 1 second and write the state of LEDs into the driver
+    for(int i=distance-1; i>=0; i--)
+    {   
+        distance_str[i] = '0';
+        if(write(fd, distance_str, 8) == -1)
+        {
+            perror("write()");
+            exit(EXIT_FAILURE);
+        }
+        sleep(1);
+    }
+    close(fd);
+
+    pthread_exit(NULL);
+}
+
+
+void order(shop* shops, int shop_index)
+{   
+    int items_num = sizeof(shops[shop_index].items)/sizeof(food); 
+    food* food_items = shops[shop_index].items;
     int total_price[items_num]; //record the total price of each item 
     //initialize the total price of each item equals 0
     for(int i=0; i<items_num; i++)
@@ -104,6 +194,16 @@ void order(food* food_items, int items_num)
             {
                 printf("Tatol price of your order is: %d\n",final_total_price);
                 printf("Please wait for a few minutes...\n");
+
+                int distance = shops[shop_index].distance;
+                pthread_t price_thread, distance_thread;
+                //create threads for displaying the price on the 7-segment and the distance on the LED
+                pthread_create(&price_thread, NULL, display_total_price, (void*) &final_total_price);
+                pthread_create(&distance_thread, NULL, display_distance, (void*) &distance);
+                //wait for the threads to finish
+                pthread_join(price_thread, NULL);   
+                pthread_join(distance_thread, NULL);
+                printf("please pick up your meal\n");
                 break;
             }
             else  //If no items are ordered, return to the main menu
@@ -153,8 +253,7 @@ int main(int argc, char* argv[])
                 shop_choice = choose_shop(shops,shops_num);
                 shop_index = shop_choice - 1;
                 //order
-                items_num = sizeof(shops[shop_index].items)/sizeof(food);
-                order(shops[shop_index].items, items_num);
+                order(shops,shop_index);
 
                 break;
             default:
