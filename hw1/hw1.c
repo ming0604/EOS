@@ -28,7 +28,7 @@ void print_shops(shop* shops, int size)
     }
     //flush the input buffer
     while (getchar() != '\n'); 
-    printf("Press Enter to return to the main menu...\n");
+    printf("Press any key to return to the main menu...\n");
     // Wait for the user to press Enter
     getchar();
 }
@@ -52,6 +52,8 @@ int choose_shop(shop* shops, int size)
         else
         {
             printf("invalid choice, please try again\n");
+            //flush the input buffer
+            while (getchar() != '\n');
         } 
     }
 }
@@ -112,7 +114,6 @@ void* display_total_price(void *total_price_ptr)
 
 void* display_distance(void *distance_ptr)
 {   
-  
     int fd;
     if((fd = open("/dev/etx_device", O_RDWR)) < 0) {
         perror("/dev/etx_device");
@@ -120,24 +121,13 @@ void* display_distance(void *distance_ptr)
     }
     //get the distance 
     int distance = *((int*)distance_ptr);
-    //initialize the string of total 8 LED 
-    char distance_str[8] = {0,0,0,0,0,0,0,0};
-    //set the initial state of the LEDs based on the distance and write it to the drive 
-    for(int i=0; i<distance; i++)
-    {
-        distance_str[i] = '1';
-        if(write(fd, distance_str, 8) == -1)
-        {
-            perror("write()");
-            exit(EXIT_FAILURE);
-        }
-        sleep(1);
-    }
-    //decrease one on-LEDs every 1 second and write the state of LEDs into the driver
-    for(int i=distance-1; i>=0; i--)
+    //initialize the string distance
+    char distance_str[12] = {0};
+
+    for(int i=distance; i>=0; i--)
     {   
-        distance_str[i] = '0';
-        if(write(fd, distance_str, 8) == -1)
+        sprintf(distance_str, "%d", i);
+        if(write(fd, distance_str, 1) == -1)
         {
             perror("write()");
             exit(EXIT_FAILURE);
@@ -204,6 +194,12 @@ void order(shop* shops, int shop_index)
                 pthread_join(price_thread, NULL);   
                 pthread_join(distance_thread, NULL);
                 printf("please pick up your meal\n");
+                //flush the input buffer
+                while (getchar() != '\n'); 
+                printf("Press any key to return to the main menu...\n");
+                // Wait for the user to press Enter
+                getchar();
+            
                 break;
             }
             else  //If no items are ordered, return to the main menu
@@ -218,6 +214,8 @@ void order(shop* shops, int shop_index)
         else    //invalid input   
         {
             printf("invalid choice, please try again\n");
+            //flush the input buffer
+            while (getchar() != '\n');
         }
     }
 }
@@ -258,6 +256,8 @@ int main(int argc, char* argv[])
                 break;
             default:
                 printf("invalid choice, please try again\n");
+                //flush the input buffer
+                while (getchar() != '\n');
                 break;
         }
     }
