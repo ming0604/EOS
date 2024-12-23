@@ -17,9 +17,10 @@ def clear():
     # Close the socket and device file
     if client_socket:
         client_socket.close()
+        print("client socket is closed")
     if fd_device:
         os.close(fd_device)
-    print("client socket and device file are closed")
+        print("device file is closed")
 
 # signal handler for cleaning up the resources and exiting the program
 def sigint_handler(signum, frame):
@@ -111,6 +112,20 @@ def update_game_display(game_state, my_player_id, screen, player_objs, obstacle_
     screen.fill((0, 0, 0))  
     # set the font
     font = pygame.font.SysFont("Arial", 36)
+
+    # Draw obstacles
+    for obstacle in game_state['obstacles']:
+        obstacle_obj.display_pose(screen,obstacle['x'],obstacle['y'])
+
+    # Draw bullets
+    for bullet in game_state['bullets']:
+        #check if the bullet owner is valid
+        if bullet['owner'] <= len(bullet_objs):
+            #display the different color bullet based on the different player
+            bullet_objs[bullet['owner']-1].display_pose(screen,bullet['x'],bullet['y'])      
+        else:
+            print("Invalid bullet owner: {}".format(bullet['owner']))
+
     # Draw players and its score
     for player in game_state['players']:
         # check if the player is alive, if the player is alive, display the player on the screen
@@ -135,20 +150,7 @@ def update_game_display(game_state, my_player_id, screen, player_objs, obstacle_
 
         # Draw all players' scores 
         score_text = font.render("Player {} score:{}".format(player['id'],player['score']), True, (255, 255, 255))
-        screen.blit(score_text, (10, 50+20*player['id']))
-
-    # Draw obstacles
-    for obstacle in game_state['obstacles']:
-        obstacle_obj.display_pose(screen,obstacle['x'],obstacle['y'])
-
-    # Draw bullets
-    for bullet in game_state['bullets']:
-        #check if the bullet owner is valid
-        if bullet['owner'] <= len(bullet_objs):
-            #display the different color bullet based on the different player
-            bullet_objs[bullet['owner']-1].display_pose(screen,bullet['x'],bullet['y'])      
-        else:
-            print("Invalid bullet owner: {}".format(bullet['owner']))
+        screen.blit(score_text, (10, 50+40*player['id']))
 
     # Draw game time
     time = game_state['gameRemainingTime']
@@ -172,12 +174,12 @@ def game_over_display(game_state, screen):
     # Draw the score of each player
     for player in game_state['players']:
         score_text = font.render("Player {} score:{}".format(player['id'],player['score']), True, (255, 255, 255))
-        score_text_rect = score_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 10*player['id']))
+        score_text_rect = score_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*player['id']))
         screen.blit(score_text, score_text_rect)
 
     # Draw the final winner
     winner_text = font.render("Winner is Player {}".format(game_state['winner']), True, (255, 255, 255))
-    winner_text_rect = winner_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 10*len(game_state['players']) + 1))
+    winner_text_rect = winner_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*(len(game_state['players']) + 1)))
     screen.blit(winner_text, winner_text_rect)
 
     # Update the screen
@@ -255,14 +257,24 @@ def receive_game_thread_func():
 
         #receive the game state json from the server
         game_state_jstr = client_socket.recv(1024).decode()
-        game_states = json.loads(game_state_jstr)
-
+        #if the game state json is empty, ignore it and continue the next loop
+        if not game_state_jstr:
+            print("recv() returned empty data from server")
+            continue
+        #parse the game state json
+        try:
+            game_states = json.loads(game_state_jstr)
+        except json.JSONDecodeError:
+            print("Received invalid JSON:", game_state_jstr)
+            continue  # Skip invalid JSON messages
+        
+        #check the game state and display the game based on the game state
         if game_states['game_state'] == "Ready":
             my_player_id = game_states['players'][0]['id']
             game_ready_display(main_screen, my_player_id)
             print("Ready")
         elif game_states['game_state'] == "Game_start":
-            print("Game start")
+            print("Game running")
             update_game_display(game_states, my_player_id, main_screen, player_objs, obstacle_obj, bullet_objs)
         elif game_states['game_state'] == "Game_over":
             print("Game over")
