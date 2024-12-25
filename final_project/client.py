@@ -20,6 +20,7 @@ def clear():
         print("client socket is closed")
     if fd_device:
         os.close(fd_device)
+        fd_device = None
         print("device file is closed")
 
 # signal handler for cleaning up the resources and exiting the program
@@ -176,11 +177,15 @@ def game_over_display(game_state, screen):
         score_text = font.render("Player {} score:{}".format(player['id'],player['score']), True, (255, 255, 255))
         score_text_rect = score_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*player['id']))
         screen.blit(score_text, score_text_rect)
-
-    # Draw the final winner
-    winner_text = font.render("Winner is Player {}".format(game_state['winner']), True, (255, 255, 255))
-    winner_text_rect = winner_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*(len(game_state['players']) + 1)))
-    screen.blit(winner_text, winner_text_rect)
+    if game_state['winner'] == 0: # if the winner is 0, it means the game is tie
+        winner_text = font.render("Tie", True, (255, 255, 255))
+        winner_text_rect = winner_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*(len(game_state['players']) + 1)))
+        screen.blit(winner_text, winner_text_rect)
+    else:
+        # Draw the final winner
+        winner_text = font.render("Winner is Player {}".format(game_state['winner']), True, (255, 255, 255))
+        winner_text_rect = winner_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*(len(game_state['players']) + 1)))
+        screen.blit(winner_text, winner_text_rect)
 
     # Update the screen
     pygame.display.flip()
@@ -221,6 +226,7 @@ def button_thread_func(device_file_dir):
         client_socket.sendall(button_state_message.encode())
 
     os.close(fd_device)
+    fd_device = None
 
 
 # thread for receiving game states from the server
@@ -228,6 +234,7 @@ def receive_game_thread_func():
     global client_socket
     global player_died
     my_player_id = None
+    diconnect = False
 
     #initialize the pygame 
     pygame.init()
@@ -245,7 +252,7 @@ def receive_game_thread_func():
     #create the game objects
     player_objs = create_player_objects(player_images,40,70)
     obstacle_obj = create_obstacle_object(obstacle_image,90,60)
-    bullet_objs = create_bullet_objects(player_num,bullet_colors,5,15)
+    bullet_objs = create_bullet_objects(player_num,bullet_colors,5,5)
 
     while True:
         #close the game when the user click the close button
@@ -259,13 +266,15 @@ def receive_game_thread_func():
         game_state_jstr = client_socket.recv(1024).decode()
         #if the game state json is empty, ignore it and continue the next loop
         if not game_state_jstr:
-            print("recv() returned empty data from server")
+            if not diconnect:
+                print("recv() returned empty data from server")
+                diconnect = True
             continue
         #parse the game state json
         try:
             game_states = json.loads(game_state_jstr)
         except json.JSONDecodeError:
-            print("Received invalid JSON:", game_state_jstr)
+            print("Received invalid JSON: {}".format(game_state_jstr))
             continue  # Skip invalid JSON messages
         
         #check the game state and display the game based on the game state
@@ -280,7 +289,7 @@ def receive_game_thread_func():
             print("Game over")
             game_over_display(game_states, main_screen)
         else:
-            print("Invalid game state")
+            print("Invalid game state:{}".format(game_states['game_state']))
             break
 
     client_socket.close()
