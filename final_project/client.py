@@ -7,6 +7,10 @@ import signal
 import json
 import pygame
 
+
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 600
+
 # Global variables
 client_socket = None
 fd_device = None
@@ -89,8 +93,6 @@ def create_bullet_objects(player_num, colors, surface_width, surface_height):
     return bullet_objs
 
 def game_ready_display(screen, player_id):
-    # Clear screen with black
-    screen.fill((0, 0, 0)) 
 
     # Draw game ready and your play id message
     #set the font
@@ -109,8 +111,7 @@ def game_ready_display(screen, player_id):
 
 
 def update_game_display(game_state, my_player_id, screen, player_objs, obstacle_obj, bullet_objs):
-    # Clear screen with black
-    screen.fill((0, 0, 0))  
+ 
     # set the font
     font = pygame.font.SysFont("Arial", 36)
 
@@ -239,12 +240,16 @@ def receive_game_thread_func():
     #initialize the pygame 
     pygame.init()
     #set the screen size
-    main_screen = pygame.display.set_mode((800, 600))
+    main_screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     #set the screen title
     pygame.display.set_caption("Game")
-    #define the player images and obstacle image path
+    #define the player images, obstacle image and background image
     player_images = ['player1.png','player2.png']
     obstacle_image = 'obstacle.png'
+    background_image = 'background1.jpg'
+    #load the background image and scale it to the screen size
+    background_image = pygame.image.load(background_image)
+    background_image = pygame.transform.scale(background_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
     #define the bullet colors
     bullet_colors = [(255, 0, 0), (0, 255, 0)]
     #number of players in the game
@@ -279,11 +284,13 @@ def receive_game_thread_func():
         
         #check the game state and display the game based on the game state
         if game_states['game_state'] == "Ready":
-            my_player_id = game_states['players'][0]['id']
-            game_ready_display(main_screen, my_player_id)
             print("Ready")
+            my_player_id = game_states['players'][0]['id']
+            main_screen.blit(background_image, (0, 0))
+            game_ready_display(main_screen, my_player_id)
         elif game_states['game_state'] == "Game_start":
             print("Game running")
+            main_screen.blit(background_image, (0, 0))
             update_game_display(game_states, my_player_id, main_screen, player_objs, obstacle_obj, bullet_objs)
         elif game_states['game_state'] == "Game_over":
             print("Game over")
@@ -314,13 +321,13 @@ def main():
     client_socket.connect((server_ip, server_port))
     
     # Create threads for sending and receiving data
-    button_thread = threading.Thread(target=button_thread_func, args=(device_file_dir,))
+    #button_thread = threading.Thread(target=button_thread_func, args=(device_file_dir,))
     recv_game_thread = threading.Thread(target=receive_game_thread_func)
     # Start the threads
-    button_thread.start()
+    #button_thread.start()
     recv_game_thread.start()
 
-    button_thread.join()
+    #button_thread.join()
     recv_game_thread.join()
 
     clear()
