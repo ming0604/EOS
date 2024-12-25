@@ -67,6 +67,7 @@ class GameObject():
         else:
             print("The object {} does not have surface and rect, so it can't be displayed".format(self.name))
 
+
 # create the player objects
 def create_player_objects(player_images,image_width,image_height):
     player_objs = []
@@ -83,6 +84,12 @@ def create_obstacle_object(obstacle_image,image_width,image_height):
     obstacle.set_image_surface(obstacle_image,image_width,image_height)
     return obstacle
 
+# create meteor object
+def create_meteor_object(meteor_image,image_width,image_height):
+    meteor = GameObject('Meteor')
+    meteor.set_image_surface(meteor_image,image_width,image_height)
+    return meteor
+
 # create the bullet object
 def create_bullet_objects(player_num, colors, surface_width, surface_height):
     bullet_objs = []
@@ -97,9 +104,11 @@ def game_ready_display(screen, player_id):
     # Draw game ready and your play id message
     #set the font
     font = pygame.font.SysFont("Arial", 36)
+    #player color list
+    player_colors = ['Red','Green']
     #create the text surface for ready message and player id message
     ready_text_surface = font.render("Game Ready", True, (255, 255, 255))
-    player_id_text_surface = font.render("You are Player {}".format(player_id), True, (255, 255, 255))
+    player_id_text_surface = font.render("You are Player {} ({})".format(player_id,player_colors[player_id-1]), True, (255, 255, 255))
     #set the text position at about the center of the screen
     ready_text_rect = ready_text_surface.get_rect(center=(screen.get_width()//2, screen.get_height()//2 - 20))
     player_id_text_rect = player_id_text_surface.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 20))
@@ -110,7 +119,7 @@ def game_ready_display(screen, player_id):
     pygame.display.flip()
 
 
-def update_game_display(game_state, my_player_id, screen, player_objs, obstacle_obj, bullet_objs):
+def update_game_display(game_state, my_player_id, screen, player_objs, obstacle_obj, meteor_obj, bullet_objs):
  
     # set the font
     font = pygame.font.SysFont("Arial", 36)
@@ -136,6 +145,9 @@ def update_game_display(game_state, my_player_id, screen, player_objs, obstacle_
             player_index = player['id']-1
             # display the player on the screen
             player_objs[player_index].display_pose(screen,player['x'],player['y'])
+            if(player['isShootingDisabled'] == True):
+                #display the meteor on the player(player shooting is disabled)
+                meteor_obj.display_pose(screen,player['x'],player['y']-50)
 
         elif player['isAlive'] == False:
             # if the player is the user, set the player_died to True, and display the death message and final score
@@ -247,6 +259,7 @@ def receive_game_thread_func():
     player_images = ['player1.png','player2.png']
     obstacle_image = 'obstacle.png'
     background_image = 'background2.jpg'
+    metero_image = 'metero.png'
     #load the background image and scale it to the screen size
     background_image = pygame.image.load(background_image)
     background_image = pygame.transform.scale(background_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -257,7 +270,9 @@ def receive_game_thread_func():
     #create the game objects
     player_objs = create_player_objects(player_images,40,70)
     obstacle_obj = create_obstacle_object(obstacle_image,90,60)
+    metero_obj = create_meteor_object(metero_image,8,7)
     bullet_objs = create_bullet_objects(player_num,bullet_colors,5,5)
+    
 
     while True:
         #close the game when the user click the close button
@@ -291,7 +306,7 @@ def receive_game_thread_func():
         elif game_states['game_state'] == "Game_start":
             print("Game running")
             main_screen.blit(background_image, (0, 0))
-            update_game_display(game_states, my_player_id, main_screen, player_objs, obstacle_obj, bullet_objs)
+            update_game_display(game_states, my_player_id, main_screen, player_objs, obstacle_obj, metero_obj, bullet_objs)
         elif game_states['game_state'] == "Game_over":
             print("Game over")
             game_over_display(game_states, main_screen)
