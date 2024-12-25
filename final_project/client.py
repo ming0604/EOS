@@ -108,7 +108,7 @@ def game_ready_display(screen, player_id):
     player_colors = ['Red','Green']
     #create the text surface for ready message and player id message
     ready_text_surface = font.render("Game Ready", True, (255, 255, 255))
-    player_id_text_surface = font.render("You are Player {} ({})".format(player_id,player_colors[player_id-1]), True, (255, 255, 255))
+    player_id_text_surface = font.render("You are Player {} ({})".format(player_id,player_colors[player_id-1]), True, (255, 0, 0) if player_id == 1 else (0, 255, 0))
     #set the text position at about the center of the screen
     ready_text_rect = ready_text_surface.get_rect(center=(screen.get_width()//2, screen.get_height()//2 - 20))
     player_id_text_rect = player_id_text_surface.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 20))
@@ -191,12 +191,12 @@ def game_over_display(game_state, screen):
         score_text_rect = score_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*player['id']))
         screen.blit(score_text, score_text_rect)
     if game_state['winner'] == 0: # if the winner is 0, it means the game is tie
-        winner_text = font.render("Tie", True, (255, 255, 255))
+        winner_text = font.render("Tie", True, (255, 255, 0))
         winner_text_rect = winner_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*(len(game_state['players']) + 1)))
         screen.blit(winner_text, winner_text_rect)
     else:
         # Draw the final winner
-        winner_text = font.render("Winner is Player {}".format(game_state['winner']), True, (255, 255, 255))
+        winner_text = font.render("Winner is Player {}".format(game_state['winner']), True, (255, 0, 0) if game_state['winner'] == 1 else (0, 255, 0))
         winner_text_rect = winner_text.get_rect(center=(screen.get_width()//2, screen.get_height()//2 + 30 + 40*(len(game_state['players']) + 1)))
         screen.blit(winner_text, winner_text_rect)
 
