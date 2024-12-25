@@ -246,7 +246,7 @@ def receive_game_thread_func():
     #define the player images, obstacle image and background image
     player_images = ['player1.png','player2.png']
     obstacle_image = 'obstacle.png'
-    background_image = 'background1.jpg'
+    background_image = 'background2.jpg'
     #load the background image and scale it to the screen size
     background_image = pygame.image.load(background_image)
     background_image = pygame.transform.scale(background_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
