@@ -210,33 +210,52 @@ def button_thread_func(device_file_dir):
     global player_died
     # Open the device file
     fd_device = os.open(device_file_dir, os.O_RDWR)
-    last = "no button input"
+    left_last = "no button input"
+    right_last = "no button input"
+    same_button_cnt = 0
 
     while player_died != True:
         buffer = os.read(fd_device, 2)
         left_button_state = buffer[0]
         right_button_state = buffer[1]
-        
-        # left button pressed
-        if left_button_state:
-            print("Left button pressed : {}".format(left_button_state))
-            time.sleep(0.22)  # when the button is pressed, wait for a while to avoid multiple inputs
-            last = "left"
-
-        # right button pressed
-        if right_button_state:
-            print("Right button pressed : {}".format(right_button_state))
-            time.sleep(0.22)   # when the button is pressed, wait for a while to avoid multiple inputs
-            last = "right"
 
         # no button pressed
-        if not left_button_state and not right_button_state and last != "no button input":
-            print("No button pressed, left button state: {}, right button state: {}".format(left_button_state, right_button_state))
-            last = "no button input"
+        if not left_button_state and not right_button_state :
+            if left_last != 0 and right_last != 0:
+                print("No button pressed, left button state: {}, right button state: {}".format(left_button_state, right_button_state))
+            left_last = 0
+            right_last = 0
+        else:
+            # left button pressed
+            if left_button_state:
+                # check if the same button is pressed multiple times, only if the same button is pressed more than 3 times, send the button state to the server
+                if left_last == 1 and same_button_cnt < 3:
+                    same_button_cnt += 1
+                    continue
+                else:
+                    same_button_cnt = 0
 
-        # Send the button state to the server
-        button_state_message = "Left button state: {}, Right button state: {}".format(left_button_state, right_button_state)
-        client_socket.sendall(button_state_message.encode())
+                print("Left button pressed : {}".format(left_button_state))
+                left_last == 1
+               
+            # right button pressed
+            if right_button_state:
+                # check if the same button is pressed multiple times, only if the same button is pressed more than 3 times, send the button state to the server
+                if right_last == 1 and same_button_cnt < 3:
+                    same_button_cnt += 1
+                    continue
+                else:
+                    same_button_cnt = 0
+
+                print("Right button pressed : {}".format(right_button_state))
+                right_last == 1
+
+            # Send the button state to the server
+            button_state_message = "Left button state: {}, Right button state: {}".format(left_button_state, right_button_state)
+            client_socket.sendall(button_state_message.encode())
+
+        # Sleep for a while (client read the button state every 0.22 seconds)
+        time.sleep(0.22)
 
     os.close(fd_device)
     fd_device = None
