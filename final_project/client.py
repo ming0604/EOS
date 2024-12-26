@@ -259,7 +259,7 @@ def receive_game_thread_func():
     player_images = ['player1.png','player2.png']
     obstacle_image = 'obstacle.png'
     background_image = 'background2.jpg'
-    metero_image = 'metero.png'
+    metero_image = 'meteor.png'
     #load the background image and scale it to the screen size
     background_image = pygame.image.load(background_image)
     background_image = pygame.transform.scale(background_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -270,9 +270,10 @@ def receive_game_thread_func():
     #create the game objects
     player_objs = create_player_objects(player_images,40,70)
     obstacle_obj = create_obstacle_object(obstacle_image,90,60)
-    metero_obj = create_meteor_object(metero_image,8,7)
+    metero_obj = create_meteor_object(metero_image,80,70)
     bullet_objs = create_bullet_objects(player_num,bullet_colors,5,5)
-    
+    #initialize the recv_buffer
+    recv_buffer = ""
 
     while True:
         #close the game when the user click the close button
@@ -281,38 +282,48 @@ def receive_game_thread_func():
                 clear()
                 pygame.quit()
                 exit(0)
-
-        #receive the game state json from the server
-        game_state_jstr = client_socket.recv(1024).decode()
-        #if the game state json is empty, ignore it and continue the next loop
-        if not game_state_jstr:
-            if not diconnect:
+        #receive the data from the server
+        data = client_socket.recv(1024)
+        if not data:
+            # server disconnected
+            if not disconnected:
                 print("recv() returned empty data from server")
-                diconnect = True
+                disconnected = True
             continue
-        #parse the game state json
-        try:
-            game_states = json.loads(game_state_jstr)
-        except json.JSONDecodeError:
-            print("Received invalid JSON: {}".format(game_state_jstr))
-            continue  # Skip invalid JSON messages
-        
-        #check the game state and display the game based on the game state
-        if game_states['game_state'] == "Ready":
-            print("Ready")
-            my_player_id = game_states['players'][0]['id']
-            main_screen.blit(background_image, (0, 0))
-            game_ready_display(main_screen, my_player_id)
-        elif game_states['game_state'] == "Game_start":
-            print("Game running")
-            main_screen.blit(background_image, (0, 0))
-            update_game_display(game_states, my_player_id, main_screen, player_objs, obstacle_obj, metero_obj, bullet_objs)
-        elif game_states['game_state'] == "Game_over":
-            print("Game over")
-            game_over_display(game_states, main_screen)
-        else:
-            print("Invalid game state:{}".format(game_states['game_state']))
-            break
+
+        # append the received data to the recv_buffer 
+        recv_buffer += data.decode('utf-8')
+
+        # 
+        while "\n" in recv_buffer:
+            line, recv_buffer = recv_buffer.split("\n", 1)
+            line = line.strip()
+            if not line:
+                # 
+                continue
+            try:
+                game_states = json.loads(line)
+            except json.JSONDecodeError:
+                print("[Warning] Received invalid JSON:", line)
+                continue
+
+            #check the game state and display the game based on the game state
+            if game_states['game_state'] == "Ready":
+                print("Ready")
+                my_player_id = game_states['players'][0]['id']
+                main_screen.blit(background_image, (0, 0))
+                game_ready_display(main_screen, my_player_id)
+            elif game_states['game_state'] == "Game_start":
+                print("Game running")
+                main_screen.blit(background_image, (0, 0))
+                update_game_display(game_states, my_player_id, main_screen, player_objs, obstacle_obj, metero_obj, bullet_objs)
+            elif game_states['game_state'] == "Game_over":
+                print("Game over")
+                game_over_display(game_states, main_screen)
+            else:
+                print("Invalid game state:{}".format(game_states['game_state']))
+                client_socket.close()
+                exit(1)
 
     client_socket.close()
     pygame.quit()
