@@ -247,7 +247,7 @@ def receive_game_thread_func():
     global client_socket
     global player_died
     my_player_id = None
-    diconnect = False
+    disconnected = False
 
     #initialize the pygame 
     pygame.init()
@@ -259,7 +259,7 @@ def receive_game_thread_func():
     player_images = ['player1.png','player2.png']
     obstacle_image = 'obstacle.png'
     background_image = 'background2.jpg'
-    metero_image = 'meteor.png'
+    metero_image = 'metero.png'
     #load the background image and scale it to the screen size
     background_image = pygame.image.load(background_image)
     background_image = pygame.transform.scale(background_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
