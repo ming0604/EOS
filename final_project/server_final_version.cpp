@@ -41,16 +41,18 @@ struct PlayerInfo {
     float x;
     float y;
     bool  isAlive;
+    bool  isShootingDisabled; // NEW: 禁用射擊
     int   score;
 };
 
 struct GameState {
-    // bool  gameOver;
     std::atomic<bool>   gameOver;
     int                 gameRemainingTime;  
     int                 bulletTimerCount;   
     int                 obstacleTimerCount; 
     PlayerInfo          player[2];
+    int meteorTarget;
+    int meteorCounter;
 
     char bulletsJSON[1024];
     char obstaclesJSON[1024];
@@ -60,16 +62,34 @@ struct GameState {
 int  g_playerFd[2] = {-1, -1};
 int  g_serverFd    = -1;
 
+
 sem_t*     g_semGame   = nullptr;
 int        g_shmid     = -1;
 GameState* g_gamePtr   = nullptr; 
 
-// 用來標示「某位玩家是否已經進入 Barrier 等待」
-bool g_playerReady[2] = {false, false};
+bool g_playerReady[2]  = {false, false};
 
-// Threads
 pthread_t g_gameThread;
 pthread_t g_playerThread[MAX_PLAYERS];
+
+// ------------------[ 遊戲常數 ]------------------
+constexpr int tick_rate = 5;
+constexpr int tick_period = 1000000000 / tick_rate;
+
+constexpr int game_length = 30;
+constexpr int bullet_period = 1;
+constexpr int bullet_tick_period = tick_rate * bullet_period;
+constexpr int obstacle_spawn_period = 2;
+constexpr int obstacle_spawn_tick_period = tick_rate * obstacle_spawn_period;
+constexpr int initial_obstacle_quantity = 5;
+constexpr int periodic_obstacle_quanity = 1;
+constexpr int meteor_period = 23;
+constexpr int meteor_duration = 8;
+constexpr int meteor_tick_duration = tick_rate * meteor_duration;
+
+constexpr float player_speed = 30.0f;
+constexpr float bullet_speed = 120.0f / tick_rate;
+constexpr float obstacle_maximum_speed = 135.0f / tick_rate;
 
 // ------------------[ 工具函式 ]------------------
 std::string recvFromClient(int fd)
@@ -85,11 +105,8 @@ std::string recvFromClient(int fd)
 
 bool sendJsonToClient(int fd, const json& jdata)
 {
-    std::string jsonStr = jdata.dump();
-
-    // [新增] 為了觀察傳出去的JSON資料
-    std::cout << "[Debug] Sending to client: " << jsonStr << std::endl;
-
+    std::string jsonStr = jdata.dump() + "\n";
+    // std::cout << "[Debug] Sending to client: " << jsonStr << std::endl;
     ssize_t ret = send(fd, jsonStr.c_str(), jsonStr.size(), 0);
     return (ret > 0);
 }
@@ -120,81 +137,77 @@ void writeJsonArray(char* dest, const std::vector<json>& arr)
     strncpy(dest, s.c_str(), 1023);
     dest[1023] = '\0';
 }
-
-// ------------------[ Signal Handler ]------------------
-void gameEndHandler(int signum)
+/*
+// ------------------[ AABB 碰撞檢測函式 ]------------------
+// 注意：假設 x, y 為「左上角」座標，w, h 為物體的寬高
+bool checkAABBCollision(float x1, float y1, float w1, float h1, 
+                        float x2, float y2, float w2, float h2)
 {
-    // std::cout << "[GameThread] GameEnd Timer triggered.\n" << std::flush;
-    // if (sem_trywait(g_semGame) != 0) std::cout << "g_semGame is locked!" << std::flush;
-    // sem_wait(g_semGame);
-    g_gamePtr->gameOver = true;
-    // g_gamePtr->gameOver.store(true, std::memory_order_relaxed);
-    // sem_post(g_semGame);
+    return !(x1 > (x2 + w2)   ||  // 物件1在物件2右側
+             (x1 + w1) < x2  ||  // 物件1在物件2左側
+             y1 > (y2 + h2)  ||  // 物件1在物件2下方
+             (y1 + h1) < y2);    // 物件1在物件2上方
+}
+*/
+bool checkAABBCollisionCenter(float cx1, float cy1, float w1, float h1,
+                              float cx2, float cy2, float w2, float h2)
+{
+    // 物體1的四個邊
+    float left1   = cx1 - w1 * 0.5f;
+    float right1  = cx1 + w1 * 0.5f;
+    float top1    = cy1 - h1 * 0.5f;
+    float bottom1 = cy1 + h1 * 0.5f;
+
+    // 物體2的四個邊
+    float left2   = cx2 - w2 * 0.5f;
+    float right2  = cx2 + w2 * 0.5f;
+    float top2    = cy2 - h2 * 0.5f;
+    float bottom2 = cy2 + h2 * 0.5f;
+
+    // 如果「一方在另一方的完全左邊」或「一方在另一方的完全右邊」或
+    // 「一方在另一方的完全上邊」或「一方在另一方的完全下邊」 ==> 沒有碰撞
+    if (right1 < left2   ||  // 物體1 在 物體2 的左邊
+        left1 > right2   ||  // 物體1 在 物體2 的右邊
+        bottom1 < top2   ||  // 物體1 在 物體2 的上邊
+        top1 > bottom2)      // 物體1 在 物體2 的下邊
+    {
+        return false;
+    }
+    // 否則重疊
+    return true;
 }
 
-// void gameUpdateHandler(int signum)
-// {
-//     sem_wait(g_semGame);
-//     auto& st = *g_gamePtr;
-
-//     // -- 子彈更新(移動) --
-//     std::vector<json> bulletVec = parseJsonArray(st.bulletsJSON);
-//     for (auto& bullet : bulletVec) {
-//         float bx = bullet["x"].get<float>();
-//         float by = bullet["y"].get<float>();
-//         bx += 5.0f; 
-//         bullet["x"] = bx;
-//         bullet["y"] = by;
-//     }
-//     // 範圍檢查
-//     std::vector<json> newBullets;
-//     for (auto& b : bulletVec) {
-//         float bx = b["x"].get<float>();
-//         float by = b["y"].get<float>();
-//         if (bx >= 0 && bx <= 800 && by >= 0 && by <= 600) {
-//             newBullets.push_back(b);
-//         }
-//     }
-//     // 每秒新增子彈(示範)
-//     st.bulletTimerCount++;
-//     {
-//         json b1;
-//         b1["owner"] = 1;
-//         b1["x"]     = st.player[0].x;
-//         b1["y"]     = st.player[0].y;
-//         newBullets.push_back(b1);
-
-//         json b2;
-//         b2["owner"] = 2;
-//         b2["x"]     = st.player[1].x;
-//         b2["y"]     = st.player[1].y;
-//         newBullets.push_back(b2);
-//     }
-//     writeJsonArray(st.bulletsJSON, newBullets);
-
-//     // 每10秒加障礙物
-//     st.obstacleTimerCount++;
-//     if (st.obstacleTimerCount >= 10) {
-//         st.obstacleTimerCount = 0;
-//         std::vector<json> obsVec = parseJsonArray(st.obstaclesJSON);
-//         json obj;
-//         obj["x"] = (int)st.player[0].x + (int)st.player[1].x;
-//         obj["y"] = 50;
-//         obsVec.push_back(obj);
-//         writeJsonArray(st.obstaclesJSON, obsVec);
-//         std::cout << "[GameThread] 10s -> Add obstacle.\n";
-//     }
-//     sem_post(g_semGame);
-// }
-
+// ------------------[ Signal Handler ]------------------
 void gameUpdateHandler(int signum)
 {
     sem_wait(g_semGame);
     auto& st = *g_gamePtr;
 
-    if(st.gameOver){
+    if (st.gameOver) {
         sem_post(g_semGame);
         return;
+    }
+
+    // 如果遊戲時間進行到一半，兩名玩家存活，隨機選擇一名玩家禁用射擊
+    if (st.gameRemainingTime == meteor_period && st.player[0].isAlive && st.player[1].isAlive && st.meteorTarget == -1) {
+        int targetPlayer = std::rand() % 2; // 隨機選擇玩家 0 或 1
+        st.player[targetPlayer].isShootingDisabled = true;
+        st.meteorTarget = targetPlayer;
+        st.meteorCounter = 0; // 開始計數
+
+        std::cout << "[GameUpdate] Player " << (targetPlayer + 1) << " is hit by meteor!\n";
+    }
+
+    // 如果隕石禁用計時器正在運行，則更新計數器
+    if (st.meteorTarget != -1) {
+        st.meteorCounter++;
+        if (st.meteorCounter >= meteor_tick_duration) { 
+            st.player[st.meteorTarget].isShootingDisabled = false;
+            std::cout << "[GameUpdate] Player " << (st.meteorTarget + 1) << "'s shooting restored!\n";
+
+            st.meteorTarget = -1;   // 重置隕石目標
+            st.meteorCounter = 0;  // 重置計數器
+        }
     }
 
     // -------------------------
@@ -205,7 +218,7 @@ void gameUpdateHandler(int signum)
         float bx = bullet["x"].get<float>();
         float by = bullet["y"].get<float>();
         // 子彈向上移動
-        by -= 5.0f;
+        by -= bullet_speed;
         bullet["x"] = bx;
         bullet["y"] = by;
     }
@@ -219,20 +232,19 @@ void gameUpdateHandler(int signum)
             newBullets.push_back(b);
         }
     }
-    // 每秒新增子彈(示範) - 不改動
+    // 每秒新增子彈(示範)
     st.bulletTimerCount++;
-    if (st.bulletTimerCount >= 20) {
+    if (st.bulletTimerCount >= bullet_tick_period) {
         st.bulletTimerCount = 0;
 
-        if (st.player[0].isAlive) {
+        if (st.player[0].isAlive && !st.player[0].isShootingDisabled) {
             json b1;
             b1["owner"] = 1;
             b1["x"]     = st.player[0].x;
             b1["y"]     = st.player[0].y - 10;
             newBullets.push_back(b1);
         }
-
-        if (st.player[1].isAlive) {
+        if (st.player[1].isAlive && !st.player[1].isShootingDisabled) {
             json b2;
             b2["owner"] = 2;
             b2["x"]     = st.player[1].x;
@@ -241,49 +253,36 @@ void gameUpdateHandler(int signum)
         }
     }
 
-    // -------------------------
     // 2) 更新 bulletsJSON
-    // -------------------------
     writeJsonArray(st.bulletsJSON, newBullets);
 
-    // -------------------------
     // 3) 定時新增障礙物 (每 10 秒)
-    // -------------------------
     st.obstacleTimerCount++;
-    if (st.obstacleTimerCount >= 200) {
+    if (st.obstacleTimerCount >= obstacle_spawn_tick_period) {
         st.obstacleTimerCount = 0;
         std::vector<json> obsVec = parseJsonArray(st.obstaclesJSON);
-        for (int i_obs=0; i_obs<5; i_obs++) {
+        for (int i_obs=0; i_obs<periodic_obstacle_quanity; i_obs++) {
             json obj;
             obj["x"] = (std::rand() % 600) + 100;
             obj["y"] = (std::rand() % 300) + 100;
-            // 下面兩行可先不給速度，讓後續程式隨機產生
-            // obj["vx"] = 0;
-            // obj["vy"] = 0;
             obsVec.push_back(obj);
         }
         writeJsonArray(st.obstaclesJSON, obsVec);
         std::cout << "[GameThread] 10s -> Add obstacle.\n";
     }
 
-    // -----------------------------------------------------------------
     // 4) 讓障礙物移動 & 牆壁反彈
-    // -----------------------------------------------------------------
     std::vector<json> obstacles = parseJsonArray(st.obstaclesJSON);
     for (auto& obs : obstacles) 
     {
-        // 如果該障礙物還沒有速度(vx, vy)，就隨機給一個
         if (!obs.contains("vx") || !obs.contains("vy")) {
-            float vx = static_cast<float>((std::rand() % 10) - 5); // -3 ~ 3
-            float vy = static_cast<float>((std::rand() % 10) - 5);
-            // if (vx == 0) vx = 1.0f;  // 避免 0
-            // if (vy == 0) vy = 1.0f;
-            vx *= 1.5f;
-            vy *= 1.5f;
+            float vx = static_cast<float>((std::rand() % (int)obstacle_maximum_speed) - (int)obstacle_maximum_speed / 2);
+            float vy = static_cast<float>((std::rand() % (int)obstacle_maximum_speed) - (int)obstacle_maximum_speed / 2);
+            vx *= 2.0f;
+            vy *= 2.0f;
             obs["vx"] = vx;
             obs["vy"] = vy;
         }
-        // 讀取資訊
         float ox = obs["x"].get<float>();
         float oy = obs["y"].get<float>();
         float vx = obs["vx"].get<float>();
@@ -295,8 +294,8 @@ void gameUpdateHandler(int signum)
 
         // 與邊界碰撞反彈 (x: 0~800, y: 0~600)
         if (ox < 0) {
-            ox = 0;   // 校正
-            vx = -vx; // 反彈
+            ox = 0;
+            vx = -vx;
         } else if (ox > 800) {
             ox = 800;
             vx = -vx;
@@ -308,8 +307,6 @@ void gameUpdateHandler(int signum)
             oy = 600;
             vy = -vy;
         }
-
-        // 寫回
         obs["x"]  = ox;
         obs["y"]  = oy;
         obs["vx"] = vx;
@@ -318,78 +315,73 @@ void gameUpdateHandler(int signum)
     writeJsonArray(st.obstaclesJSON, obstacles);
 
     // -----------------------------------------------------------------
-    // 5) 判斷 子彈 與 障礙物 碰撞
+    // 5) 判斷 子彈 與 障礙物 碰撞 (AABB 取代距離判斷)
     //    (擊中就移除子彈+障礙物)
     // -----------------------------------------------------------------
+    // 定義子彈、障礙物在 AABB 檢測時的寬高 (可自行調整)
+    const float bulletW = 5.0f;
+    const float bulletH = 5.0f;
+    const float obstacleW = 90.0f;
+    const float obstacleH = 60.0f;
+
     std::vector<json> updatedBullets; 
     updatedBullets.reserve(newBullets.size());
-
-    // 我們將先保留全部 obstacle，待會再剔除被擊中的
     std::vector<json> updatedObstacles;
     updatedObstacles.reserve(obstacles.size());
 
-    // 設定一個碰撞半徑
-    const float bulletHitRadius = 25.0f;
-
-    // 逐一檢查障礙物有沒有被子彈擊中
     for (auto& obs : obstacles) {
         bool obstacleDestroyed = false;
         float ox = obs["x"].get<float>();
         float oy = obs["y"].get<float>();
 
-        // 一個障礙物，可能被多顆子彈撞到，但只要撞一次就毀
-        // 所以先把 bulletVec 全部檢查完，再加到 updatedBullets
         std::vector<json> tmpBullets;
-
         for (auto& b : newBullets) {
             float bx = b["x"].get<float>();
             float by = b["y"].get<float>();
-            float dx = bx - ox;
-            float dy = by - oy;
-            float dist2 = dx*dx + dy*dy; // 距離平方
 
-            if (dist2 < (bulletHitRadius * bulletHitRadius)) {
-                // 子彈與障礙物碰撞 -> 該障礙物被毀，子彈也消失
+            // 使用 AABB 判斷取代「距離」判斷
+            if (checkAABBCollisionCenter(bx, by, bulletW, bulletH,
+                                   ox, oy, obstacleW, obstacleH))
+            {
+                // 碰撞 -> 障礙物毀、子彈消失
                 obstacleDestroyed = true;
-                // 不將這顆子彈推入 tmpBullets (因為它被銷毀)
                 int owner = b["owner"];
-                st.player[owner - 1].score += 1;
+                st.player[owner - 1].score += 1; 
             }
             else {
-                // 沒有撞到 -> 保留子彈
                 tmpBullets.push_back(b);
             }
         }
 
-        // 這次檢查完後，「沒撞到的子彈」成為下一輪基準
         newBullets = tmpBullets;
 
-        // 如果障礙物沒被銷毀，就保留
         if (!obstacleDestroyed) {
             updatedObstacles.push_back(obs);
         }
     }
-    // 更新完後，剩下的新子彈集合才是真正的存活子彈
     updatedBullets.insert(updatedBullets.end(),
                           newBullets.begin(), newBullets.end());
 
     // -----------------------------------------------------------------
-    // 6) 判斷 障礙物 與 玩家 碰撞
+    // 6) 判斷 障礙物 與 玩家 碰撞 (AABB 取代距離判斷)
     //    (若碰撞，玩家 isAlive = false)
     // -----------------------------------------------------------------
-    const float obstacleHitRadius = 50.0f;
+    // 定義玩家、障礙物在 AABB 檢測時的寬高 (可自行調整)
+    const float playerW = 30.0f;
+    const float playerH = 70.0f;
     for (auto& obs : updatedObstacles) {
         float ox = obs["x"].get<float>();
         float oy = obs["y"].get<float>();
+
         for (int i = 0; i < 2; i++) {
             if (st.player[i].isAlive) {
                 float px = st.player[i].x;
                 float py = st.player[i].y;
-                float dx = px - ox;
-                float dy = py - oy;
-                float dist2 = dx*dx + dy*dy;
-                // 碰到就把玩家標記成死亡
-                if (dist2 < (obstacleHitRadius * obstacleHitRadius)) {
+
+                // 使用 AABB 判斷
+                if (checkAABBCollisionCenter(px, py, playerW, playerH,
+                                       ox, oy, obstacleW, obstacleH))
+                {
                     st.player[i].isAlive = false;
                 }
             }
@@ -403,28 +395,19 @@ void gameUpdateHandler(int signum)
     writeJsonArray(st.bulletsJSON,   updatedBullets);
 
     // -----------------------------------------------------------------
-    // 8) 遊戲剩餘時間倒數
+    // 8) 遊戲剩餘時間倒數 (原邏輯)
     // -----------------------------------------------------------------
-    static int one_sec = 20;
+    static int one_sec = tick_rate;
     one_sec--;
-    if (one_sec == 0){
-        one_sec = 20;
+    if (one_sec == 0) {
+        one_sec = tick_rate;
         st.gameRemainingTime--;
     }
 
     // -----------------------------------------------------------------
-    // 9) 判斷是否兩個玩家皆死亡
+    // 9) 判斷是否兩個玩家皆死亡，或是遊戲時間到
     // -----------------------------------------------------------------
-    st.gameOver = !st.player[0].isAlive && !st.player[1].isAlive;
-
-    // -----------------------------------------------------------------
-    // 9) 判斷是否遊戲時間到
-    // -----------------------------------------------------------------
-    // static int game_duration = 1200;
-    // game_duration--;
-    // if (game_duration == 0) {
-    //     st.gameOver = true;
-    // }
+    st.gameOver = (!st.player[0].isAlive && !st.player[1].isAlive) || st.gameRemainingTime == 0;
 
     // 其餘原邏輯 (或直接結束)
     sem_post(g_semGame);
@@ -443,9 +426,8 @@ void* runGameThread(void* arg)
     // 初始化五個障礙物
     sem_wait(g_semGame);
     auto& st = *g_gamePtr;
-
     std::vector<json> obsVec = parseJsonArray(st.obstaclesJSON);
-    for (int i_obs=0; i_obs<5; i_obs++) {
+    for (int i_obs = 0; i_obs < initial_obstacle_quantity; i_obs++) {
         json obj;
         obj["x"] = (std::rand() % 600) + 100;
         obj["y"] = (std::rand() % 300) + 100;
@@ -456,27 +438,13 @@ void* runGameThread(void* arg)
 
     // sigaction
     {
-        struct sigaction sa;
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = gameEndHandler;
-        sigaction(SIGALRM, &sa, NULL);
-
         struct sigaction sb;
         memset(&sb, 0, sizeof(sb));
         sb.sa_handler = gameUpdateHandler;
         sigaction(SIGUSR1, &sb, NULL);
     }
 
-    // 遊戲結束計時器(60秒)
-    {
-        struct itimerval itv;
-        itv.it_value.tv_sec = 30;
-        itv.it_value.tv_usec = 0;
-        itv.it_interval.tv_sec = 0;
-        itv.it_interval.tv_usec = 0;
-        setitimer(ITIMER_REAL, &itv, nullptr);
-    }
-    // 每秒週期 SIGUSR1
+    // 每秒週期 SIGUSR1 (改成 0.05s)
     {
         timer_t timerid;
         struct sigevent sev;
@@ -489,8 +457,10 @@ void* runGameThread(void* arg)
         struct itimerspec its;
         its.it_value.tv_sec = 1;
         its.it_value.tv_nsec = 0;
+        // its.it_interval.tv_sec = 1;
         its.it_interval.tv_sec = 0;
-        its.it_interval.tv_nsec = 50000000;
+        // its.it_interval.tv_nsec = 0;
+        its.it_interval.tv_nsec = tick_period;
         timer_settime(timerid, 0, &its, nullptr);
     }
 
@@ -511,12 +481,9 @@ void* runGameThread(void* arg)
 // ----------------------------------------------------------------
 // 在 Player “Thread” 中，我們使用「雙線程」
 //
-//  Thread1: 讀「硬體/裝置輸入」(從 socket 收到自訂格式字串)
-//           -> 更新 shared memory 
+//  Thread1: 讀取玩家指令 -> 更新 shared memory 
 //  Thread2: 傳送「遊戲狀態」(JSON) 給 client
 // ----------------------------------------------------------------
-
-// 結構: 用於 pthread_create 傳遞參數
 struct PlayerThreadArgs {
     int playerIdx; 
     int sockFd;
@@ -532,25 +499,22 @@ void* playerInputThread(void* arg)
     std::cout << "[Player" << (idx+1) 
               << "] Thread1 (Input) start.\n";
 
-    // 標記自己就緒
-    g_playerReady[idx] = true;
-    // 等 2 位 playerReady = true
+    g_playerReady[idx] = true; // 標記自己就緒
+
 
     while (true) {
-        // 檢查遊戲結束
         sem_wait(g_semGame);
         bool over = g_gamePtr->gameOver;
         sem_post(g_semGame);
         if (over) break;
 
-        // 用 select 等待 client 傳來指令
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(fd, &readfds);
         struct timeval tv;
         tv.tv_sec = 0;  
         tv.tv_usec = 200000; // 0.2s
-        int ret = select(fd+1, &readfds, NULL, NULL, &tv);
+        int ret = select(fd + 1, &readfds, NULL, NULL, &tv);
         if (ret < 0) {
             if (errno == EINTR) continue;
             break; 
@@ -559,27 +523,30 @@ void* playerInputThread(void* arg)
             std::string input = recvFromClient(fd);
             if (input.empty()) {
                 // client 斷線
-                // sem_wait(g_semGame);
-                // g_gamePtr->player[idx].isAlive = false;
-                // sem_post(g_semGame);
                 break;
             }
-
             // [修改] 直接解析字串: "Left button state: X, Right button state: Y"
-            std::cout << "[Debug] Received from client: " << input << std::endl;
+            // std::cout << "[Debug] Received from client: " << input << std::endl;
             int left = 0;
             int right = 0;
-            // 使用 sscanf 簡化
-            if (sscanf(input.c_str(),
-                       "Left button state: %d, Right button state: %d",
-                       &left, &right) == 2)
+            if (sscanf(input.c_str(), "Left button state: %d, Right button state: %d", &left, &right) == 2)
             {
                 sem_wait(g_semGame);
-                if (left == 1)  g_gamePtr->player[idx].x -= 15.0f;
-                if (right == 1) g_gamePtr->player[idx].x += 15.0f;
+                if (left == 1) {
+                    g_gamePtr->player[idx].x -= player_speed;
+                }
+                if (right == 1) {
+                    g_gamePtr->player[idx].x += player_speed;
+                }
+                // 確保玩家位置在範圍內
+                if (g_gamePtr->player[idx].x < 30) {
+                    g_gamePtr->player[idx].x = 30;
+                }
+                if (g_gamePtr->player[idx].x > 770) {
+                    g_gamePtr->player[idx].x = 770;
+                }
                 sem_post(g_semGame);
             }
-            // 其它格式的字串就略過或做其它處理
         }
     }
 
@@ -599,15 +566,11 @@ void* playerSendThread(void* arg)
               << "] Thread2 (Send) start.\n";
 
     while (true) {
-        // 檢查遊戲結束
         sem_wait(g_semGame);
-        bool over = g_gamePtr->gameOver;
+        bool over    = g_gamePtr->gameOver;
         bool isAlive = g_gamePtr->player[idx].isAlive;
 
-        // 建構 stateMsg
         json stateMsg;
-        // stateMsg["game_state"] = (g_gamePtr->gameOver) ? 
-        //                           "Game_over" : "Game_start";
         stateMsg["game_state"] = "Game_start";
         stateMsg["gameRemainingTime"] = g_gamePtr->gameRemainingTime;
         
@@ -619,6 +582,7 @@ void* playerSendThread(void* arg)
             pp["y"]       = g_gamePtr->player[i].y;
             pp["isAlive"] = g_gamePtr->player[i].isAlive;
             pp["score"]   = g_gamePtr->player[i].score;
+            pp["isShootingDisabled"] = g_gamePtr->player[i].isShootingDisabled; // NEW
             arr.push_back(pp);
         }
         stateMsg["players"]   = arr;
@@ -626,15 +590,11 @@ void* playerSendThread(void* arg)
         stateMsg["obstacles"] = json::parse(g_gamePtr->obstaclesJSON);
         sem_post(g_semGame);
 
-        // 傳送給 client
         if (!sendJsonToClient(fd, stateMsg)) {
             break;
         }
-
-        // 如果玩家已死，離開
-        // if (!isAlive) break;
-        // 如果遊戲結束，離開
-        if (over) break;
+        // if (!isAlive) break; // 若玩家掛了就結束傳送
+        if (over) break;       // 或遊戲結束就停止傳送
 
         usleep(200000); // 0.2s 間隔
     }
@@ -644,26 +604,21 @@ void* playerSendThread(void* arg)
     return nullptr;
 }
 
-// =========== 改造後的 runPlayerThread ===========
-
 void* runPlayerThread(void* threadArg)
 {
-    // 提取參數
     int playerIdx = *(int*)threadArg; 
     int fd        = g_playerFd[playerIdx];
 
     std::cout << "[PlayerThread] Player" << (playerIdx+1) 
               << " started.\n";
 
-    // [ADD] Ready 狀態：傳送 JSON 給該玩家，告知他是第幾號玩家
+    // [ADD] Ready 狀態：傳送 JSON 給該玩家
     {
         sem_wait(g_semGame);
-
         json readyMsg;
         readyMsg["game_state"] = "Ready";
-
-        // 只包含當前玩家自己的資訊
         json arr = json::array();
+
         json p;
         p["id"]      = playerIdx + 1;
         p["x"]       = g_gamePtr->player[playerIdx].x;
@@ -673,20 +628,18 @@ void* runPlayerThread(void* threadArg)
         arr.push_back(p);
 
         readyMsg["players"] = arr;
-
         sem_post(g_semGame);
 
-        // 送給 client
         sendJsonToClient(fd, readyMsg);
     }
     
     // 等待大家就緒
     std::cout << "game set for player " << playerIdx << std::endl;
-    sleep(8);
+    sleep(8); // 保留與原程式相同的 sleep
     pthread_barrier_wait(&g_barrier);
     std::cout << "game started for player " << playerIdx << std::endl;
 
-    // 建立兩條子threads
+    // 建立子線程
     pthread_t tInput, tSend;
     PlayerThreadArgs args;
     args.playerIdx = playerIdx;
@@ -720,15 +673,13 @@ void* runPlayerThread(void* threadArg)
     }
     sem_post(g_semGame);
 
-    // 送給 client
     sendJsonToClient(fd, endMsg);
 
     sleep(10);
-
     close(fd);
+
     std::cout << "[PlayerThread] Player" << (playerIdx+1) 
               << " end.\n";
-
     pthread_exit(nullptr);
     return nullptr;
 }
@@ -738,10 +689,8 @@ int main()
 {
     srand(time(NULL));
 
-    // 初始化 pthread_barrier，等 2 個 player + 1 個遊戲
     pthread_barrier_init(&g_barrier, nullptr, MAX_PLAYERS + 1);
 
-    // 建立 Shared Memory
     g_shmid = shmget(SHM_KEY, SHM_SIZE, IPC_CREAT | 0666);
     if (g_shmid < 0) {
         std::cerr << "[Main] shmget failed\n";
@@ -754,18 +703,18 @@ int main()
     }
     memset(g_gamePtr, 0, sizeof(GameState));
     g_gamePtr->gameOver           = false;
-    g_gamePtr->gameRemainingTime  = 30;
+    g_gamePtr->gameRemainingTime  = game_length;
+    g_gamePtr->meteorTarget = -1;
+    g_gamePtr->meteorCounter = 0;
     g_gamePtr->bulletTimerCount   = 0;
     g_gamePtr->obstacleTimerCount = 0;
 
-    // 設定初始玩家位置
     g_gamePtr->player[0] = {250.0f, 550.0f, true, 0};
     g_gamePtr->player[1] = {500.0f, 550.0f, true, 0};
 
     strcpy(g_gamePtr->bulletsJSON, "[]");
     strcpy(g_gamePtr->obstaclesJSON, "[]");
 
-    // 建立 semaphore
     sem_unlink("/gameSem");
     g_semGame = sem_open("/gameSem", O_CREAT, 0666, 1);
     if (g_semGame == SEM_FAILED) {
@@ -773,13 +722,11 @@ int main()
         return 1;
     }
 
-    // 創建遊戲執行緒
     if (pthread_create(&g_gameThread, nullptr, runGameThread, nullptr) != 0) {
         std::cerr << "[Main] pthread_create for GameThread failed\n";
         return 1;
     }
 
-    // 建立 socket
     g_serverFd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_serverFd < 0) {
         std::cerr << "[Main] cannot create socket\n";
@@ -799,7 +746,6 @@ int main()
         close(g_serverFd);
         return 1;
     }
-
     if (listen(g_serverFd, BACKLOG) < 0) {
         std::cerr << "[Main] listen failed\n";
         close(g_serverFd);
@@ -807,7 +753,6 @@ int main()
     }
     std::cout << "[Main] Listening on port " << SERVER_PORT << "...\n";
 
-    // 接受 2 位玩家
     for (int i = 0; i < MAX_PLAYERS; i++) {
         sockaddr_in caddr;
         socklen_t caddrLen = sizeof(caddr);
@@ -819,8 +764,6 @@ int main()
         g_playerFd[i] = cfd;
         std::cout << "[Main] Player" << (i+1) << " connected.\n";
 
-        // 建立玩家執行緒
-        //  這裡用一個小 trick：將 playerIdx 存在陣列裡，以便傳給執行緒函數
         static int playerIndices[MAX_PLAYERS] = {0,1};
         if (pthread_create(&g_playerThread[i], nullptr,
                            runPlayerThread,
@@ -831,7 +774,6 @@ int main()
         }
     }
 
-    // Main Thread：輪詢遊戲結束 (可改用 join gameThread 方式)
     while (true) {
         sem_wait(g_semGame);
         bool over = g_gamePtr->gameOver;
@@ -842,13 +784,11 @@ int main()
 
     std::cout << "[Main] GameOver, Cleaning up...\n";
 
-    // 若需要確保 GameThread 與 PlayerThreads 結束，可在此 pthread_join
     pthread_join(g_gameThread, nullptr);
     for (int i = 0; i < MAX_PLAYERS; i++){
         pthread_join(g_playerThread[i], nullptr);
     }
 
-    // 關閉
     close(g_serverFd);
     shmdt(g_gamePtr);
     shmctl(g_shmid, IPC_RMID, NULL);
